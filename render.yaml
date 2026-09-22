@@ -1,0 +1,55 @@
+services:
+  - type: web
+    runtime: node
+    name: shirinliklar-backend
+    plan: free
+    rootDir: backend
+    buildCommand: npm install && npx prisma generate && npx prisma migrate deploy
+    startCommand: npm start
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: BOT_TOKEN
+        sync: false
+      - key: MINIAPP_URL
+        value: https://shirinliklar-miniapp.onrender.com
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: STAFF_CHAT_ID
+        sync: false
+      - key: DELIVERY_PRICE
+        value: "15000"
+      # Rasm yuklash (ImgBB, bepul)
+      - key: IMGBB_API_KEY
+        sync: false
+      # Click/Payme — ixtiyoriy, keyinchalik qo'shiladi
+      - key: CLICK_MERCHANT_ID
+        sync: false
+      - key: CLICK_SERVICE_ID
+        sync: false
+      - key: CLICK_SECRET_KEY
+        sync: false
+      - key: PAYME_MERCHANT_ID
+        sync: false
+      - key: PAYME_KEY
+        sync: false
+
+  - type: web
+    runtime: static
+    name: shirinliklar-miniapp
+    rootDir: miniapp
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
+    envVars:
+      - key: VITE_API_URL
+        value: https://shirinliklar-backend.onrender.com
+
+  - type: web
+    runtime: static
+    name: shirinliklar-admin
+    rootDir: admin
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
+    envVars:
+      - key: VITE_API_URL
+        value: https://shirinliklar-backend.onrender.com
