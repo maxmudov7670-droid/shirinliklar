@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="uz">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Shirinliklar</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script>
+      // Ilova ochilganda Telegram uni to'liq yoyib (expand) ko'rsatishi uchun
+      // bu chaqiruvlar iloji boricha ERTAROQ (React yuklanishidan OLDIN)
+      // bajariladi — aks holda foydalanuvchi bir muddat "yarim ochiq",
+      // xira/tuman fon ortida qolgan ilovani ko'radi, toki biror joyga
+      // teginmaguncha.
+      if (window.Telegram && window.Telegram.WebApp) {
+        window.Telegram.WebApp.ready();
+        window.Telegram.WebApp.expand();
+      }
+    </script>
+  </head>
+  <body class="bg-cream">
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
