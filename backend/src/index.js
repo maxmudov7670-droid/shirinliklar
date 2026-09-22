@@ -14,6 +14,7 @@ const adminRouter = require("./routes/admin");
 const paymentsRouter = require("./routes/payments");
 const uploadRouter = require("./routes/upload");
 const reportsRouter = require("./routes/reports");
+const settingsRouter = require("./routes/settings");
 
 const app = express();
 
@@ -44,6 +45,7 @@ app.use("/api/admin", adminRouter);
 app.use("/api/payments", paymentsRouter);
 app.use("/api/upload", uploadRouter);
 app.use("/api/reports", reportsRouter);
+app.use("/api/settings", settingsRouter);
 
 app.use((req, res) => {
   res.status(404).json({ error: "Topilmadi" });

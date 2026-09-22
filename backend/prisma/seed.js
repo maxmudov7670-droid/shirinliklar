@@ -18,16 +18,26 @@ const categories = [
   { emoji: "🎁", nameUz: "Sovg'alik shirinliklar", nameRu: "Подарочные сладости", sortOrder: 8 },
 ];
 
+const DEFAULT_START_IMAGE = "https://i.ibb.co/mFVkCCGS/shirinliklar-start-logo.jpg";
+
 async function main() {
   const count = await prisma.category.count();
   if (count > 0) {
     console.log(`ℹ️  Bazada allaqachon ${count} ta kategoriya bor — seed o'tkazib yuborildi.`);
-    return;
+  } else {
+    for (const cat of categories) {
+      await prisma.category.create({ data: cat });
+    }
+    console.log(`✅ ${categories.length} ta boshlang'ich kategoriya yozildi`);
   }
-  for (const cat of categories) {
-    await prisma.category.create({ data: cat });
+
+  // Sozlamalar qatori (id=1) hali bo'lmasa — boshlang'ich logo bilan yaratamiz.
+  // Admin keyinchalik Admin Panel > Sozlamalar orqali o'zgartira oladi.
+  const settings = await prisma.settings.findUnique({ where: { id: 1 } });
+  if (!settings) {
+    await prisma.settings.create({ data: { id: 1, startImage: DEFAULT_START_IMAGE } });
+    console.log("✅ Boshlang'ich logo sozlamasi yozildi");
   }
-  console.log(`✅ ${categories.length} ta boshlang'ich kategoriya yozildi`);
 }
 
 main()

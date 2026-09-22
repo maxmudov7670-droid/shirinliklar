@@ -9,6 +9,7 @@ import Categories from "./pages/Categories";
 import CustomCakes from "./pages/CustomCakes";
 import PromoCodes from "./pages/PromoCodes";
 import Customers from "./pages/Customers";
+import Settings from "./pages/Settings";
 
 export default function App() {
   const { authed } = useAuth();
@@ -25,6 +26,7 @@ export default function App() {
         <Route path="/custom-cakes" element={<CustomCakes />} />
         <Route path="/promocodes" element={<PromoCodes />} />
         <Route path="/customers" element={<Customers />} />
+        <Route path="/settings" element={<Settings />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

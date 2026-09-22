@@ -12,6 +12,14 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// Bitta qatordan iborat umumiy sozlamalar (id doim 1) — masalan bot va
+// Mini App'ning boshlang'ich (start) logosi, admin panel orqali o'zgartiriladi.
+model Settings {
+  id         Int      @id @default(1)
+  startImage String? // bot /start xabari va Mini App bosh sahifasidagi logo
+  updatedAt  DateTime @updatedAt
+}
+
 model Category {
   id        Int       @id @default(autoincrement())
   emoji     String // masalan "🍰" — rasm bo'lmaganda zaxira (fallback) sifatida ishlatiladi

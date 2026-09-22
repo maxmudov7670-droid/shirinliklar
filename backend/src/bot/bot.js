@@ -1,18 +1,40 @@
 const { Telegraf, Markup } = require("telegraf");
+const prisma = require("../lib/prisma");
 const { statusMessage } = require("../lib/orderStatus");
 
 // MUHIM: bu ALOHIDA Telegram bot — o'zining BOT_TOKEN'idan foydalanadi,
 // mavjud ovqat botining tokeniga hech qanday aloqasi yo'q.
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
-bot.start((ctx) => {
+async function getStartImage() {
+  try {
+    const s = await prisma.settings.findUnique({ where: { id: 1 } });
+    return s?.startImage || null;
+  } catch (err) {
+    console.error("Sozlamalarni (logo) o'qishda xatolik:", err.message);
+    return null;
+  }
+}
+
+bot.start(async (ctx) => {
   const miniAppUrl = process.env.MINIAPP_URL;
   const firstName = ctx.from?.first_name || "";
+  const caption = `Assalomu alaykum, ${firstName}! 🍰\n\nShirinliklar do'koniga xush kelibsiz!\nEng mazali tortlar, kapkeyklar va desertlarni buyurtma qilish uchun tugmani bosing 👇`;
+  const keyboard = Markup.inlineKeyboard([Markup.button.webApp("🍰 Buyurtma berish", miniAppUrl)]);
 
-  ctx.reply(
-    `Assalomu alaykum, ${firstName}! 🍰\n\nShirinliklar do'koniga xush kelibsiz!\nEng mazali tortlar, kapkeyklar va desertlarni buyurtma qilish uchun tugmani bosing 👇`,
-    Markup.inlineKeyboard([Markup.button.webApp("🍰 Buyurtma berish", miniAppUrl)])
-  );
+  const startImage = await getStartImage();
+  if (startImage) {
+    // Rasm bilan yuborishda muvaffaqiyatsiz bo'lsa (masalan havola buzilgan
+    // bo'lsa), botning butunlay javob bermay qolmasligi uchun oddiy matnga
+    // qaytamiz.
+    try {
+      await ctx.replyWithPhoto(startImage, { caption, ...keyboard });
+      return;
+    } catch (err) {
+      console.error("/start logosi bilan yuborishda xatolik, matn bilan yuborilmoqda:", err.message);
+    }
+  }
+  await ctx.reply(caption, keyboard);
 });
 
 bot.help((ctx) => {

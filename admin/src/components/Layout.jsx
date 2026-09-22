@@ -9,6 +9,7 @@ const LINKS = [
   { to: "/custom-cakes", label: "🎂 Maxsus tortlar" },
   { to: "/promocodes", label: "🎟️ Promo kodlar" },
   { to: "/customers", label: "👥 Mijozlar" },
+  { to: "/settings", label: "⚙️ Sozlamalar" },
 ];
 
 export default function Layout() {
