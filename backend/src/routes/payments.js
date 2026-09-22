@@ -1,0 +1,222 @@
+const express = require("express");
+const crypto = require("crypto");
+const prisma = require("../lib/prisma");
+const { notifyStaffNewOrder } = require("../bot/bot");
+
+const router = express.Router();
+
+/* ========================================================================
+ * CLICK — Merchant API (v2). ALOHIDA kalitlar — mavjud ovqat botiniki emas.
+ * ====================================================================== */
+
+const CLICK_ERROR = {
+  SIGN_FAILED: -1,
+  WRONG_AMOUNT: -2,
+  ACTION_NOT_FOUND: -3,
+  ALREADY_PAID: -4,
+  ORDER_NOT_FOUND: -5,
+  TRANSACTION_NOT_FOUND: -6,
+};
+
+function clickSign({ click_trans_id, service_id, merchant_trans_id, merchant_prepare_id, amount, action, sign_time }) {
+  const secret = process.env.CLICK_SECRET_KEY;
+  const parts =
+    action === "1" || action === 1
+      ? [click_trans_id, service_id, secret, merchant_trans_id, merchant_prepare_id, amount, action, sign_time]
+      : [click_trans_id, service_id, secret, merchant_trans_id, amount, action, sign_time];
+  return crypto.createHash("md5").update(parts.join("")).digest("hex");
+}
+
+router.post("/click", express.urlencoded({ extended: true }), async (req, res) => {
+  const body = req.body;
+  const { click_trans_id, merchant_trans_id, click_paydoc_id, amount, action, sign_string, error: clickError } = body;
+  const base = { click_trans_id, merchant_trans_id };
+
+  try {
+    if (clickSign(body) !== sign_string) {
+      return res.json({ ...base, error: CLICK_ERROR.SIGN_FAILED, error_note: "SIGN CHECK FAILED" });
+    }
+
+    const order = await prisma.order.findUnique({ where: { id: Number(merchant_trans_id) }, include: { user: true } });
+    if (!order) return res.json({ ...base, error: CLICK_ERROR.ORDER_NOT_FOUND, error_note: "Order not found" });
+
+    if (Math.round(Number(amount)) !== order.totalPrice) {
+      return res.json({ ...base, error: CLICK_ERROR.WRONG_AMOUNT, error_note: "Incorrect amount" });
+    }
+
+    if (String(action) === "0") {
+      if (order.paymentStatus === "paid") {
+        return res.json({ ...base, error: CLICK_ERROR.ALREADY_PAID, error_note: "Already paid" });
+      }
+      await prisma.order.update({ where: { id: order.id }, data: { paymentProviderData: { click_trans_id, click_paydoc_id } } });
+      return res.json({ ...base, merchant_prepare_id: order.id, error: 0, error_note: "Success" });
+    }
+
+    if (String(action) === "1") {
+      const providerData = order.paymentProviderData || {};
+      if (String(providerData.click_trans_id) !== String(click_trans_id)) {
+        return res.json({ ...base, error: CLICK_ERROR.TRANSACTION_NOT_FOUND, error_note: "Transaction not found" });
+      }
+      if (Number(clickError) < 0) {
+        await prisma.order.update({ where: { id: order.id }, data: { paymentStatus: "failed" } });
+        return res.json({ ...base, merchant_confirm_id: order.id, error: 0, error_note: "Success" });
+      }
+      if (order.paymentStatus !== "paid") {
+        await prisma.order.update({ where: { id: order.id }, data: { paymentStatus: "paid" } });
+        notifyStaffNewOrder(order);
+      }
+      return res.json({ ...base, merchant_confirm_id: order.id, error: 0, error_note: "Success" });
+    }
+
+    return res.json({ ...base, error: CLICK_ERROR.ACTION_NOT_FOUND, error_note: "Action not found" });
+  } catch (err) {
+    console.error("Click webhook xatosi:", err);
+    return res.json({ ...base, error: CLICK_ERROR.ORDER_NOT_FOUND, error_note: "Internal error" });
+  }
+});
+
+/* ========================================================================
+ * PAYME — Merchant API (JSON-RPC 2.0). ALOHIDA kalitlar.
+ * ====================================================================== */
+
+const PAYME_ERROR = {
+  INVALID_AMOUNT: -31001,
+  TRANSACTION_NOT_FOUND: -31003,
+  CANNOT_CANCEL: -31007,
+  CANNOT_PERFORM: -31008,
+  ACCOUNT_NOT_FOUND: -31050,
+  METHOD_NOT_FOUND: -32601,
+};
+
+const PAYME_MESSAGES = {
+  [PAYME_ERROR.INVALID_AMOUNT]: { ru: "Неверная сумма", uz: "Noto'g'ri summa", en: "Invalid amount" },
+  [PAYME_ERROR.TRANSACTION_NOT_FOUND]: { ru: "Транзакция не найдена", uz: "Tranzaksiya topilmadi", en: "Transaction not found" },
+  [PAYME_ERROR.CANNOT_CANCEL]: { ru: "Невозможно отменить транзакцию", uz: "Tranzaksiyani bekor qilib bo'lmaydi", en: "Cannot cancel transaction" },
+  [PAYME_ERROR.CANNOT_PERFORM]: { ru: "Невозможно выполнить операцию", uz: "Amalni bajarib bo'lmaydi", en: "Cannot perform operation" },
+  [PAYME_ERROR.ACCOUNT_NOT_FOUND]: { ru: "Заказ не найден", uz: "Buyurtma topilmadi", en: "Order not found" },
+  [PAYME_ERROR.METHOD_NOT_FOUND]: { ru: "Метод не найден", uz: "Metod topilmadi", en: "Method not found" },
+};
+
+function paymeError(code) {
+  const e = new Error(PAYME_MESSAGES[code]?.en || "Payme error");
+  e.code = code;
+  if (code === PAYME_ERROR.ACCOUNT_NOT_FOUND) e.data = "order_id";
+  return e;
+}
+
+const PAYME_EXPIRE_MS = 12 * 60 * 60 * 1000;
+
+function requirePaymeAuth(req, res, next) {
+  const auth = req.header("authorization") || "";
+  const key = process.env.PAYME_TEST_MODE === "true" ? process.env.PAYME_TEST_KEY : process.env.PAYME_KEY;
+  const expected = "Basic " + Buffer.from(`Paycom:${key}`).toString("base64");
+  if (auth !== expected) {
+    return res.json({ error: { code: -32504, message: "Insufficient privilege to perform this method." }, id: req.body?.id ?? null });
+  }
+  next();
+}
+
+async function findOrderForPayme(orderId, amountTiyin) {
+  const cleanedId = String(orderId ?? "").trim().replace(/^#/, "");
+  const numericId = Number(cleanedId);
+  if (!Number.isInteger(numericId) || numericId <= 0) throw paymeError(PAYME_ERROR.ACCOUNT_NOT_FOUND);
+
+  const order = await prisma.order.findUnique({ where: { id: numericId } });
+  if (!order) throw paymeError(PAYME_ERROR.ACCOUNT_NOT_FOUND);
+  if (order.totalPrice * 100 !== Number(amountTiyin)) throw paymeError(PAYME_ERROR.INVALID_AMOUNT);
+  return order;
+}
+
+router.post("/payme", requirePaymeAuth, async (req, res) => {
+  const { method, params, id } = req.body;
+
+  function ok(result) {
+    res.json({ result, id });
+  }
+  function fail(code, data) {
+    const error = { code, message: PAYME_MESSAGES[code] || { ru: "Xatolik", uz: "Xatolik", en: "Error" } };
+    if (data !== undefined) error.data = data;
+    res.json({ error, id });
+  }
+
+  try {
+    if (method === "CheckPerformTransaction") {
+      await findOrderForPayme(params.account.order_id, params.amount);
+      return ok({ allow: true });
+    }
+
+    if (method === "CreateTransaction") {
+      const order = await findOrderForPayme(params.account.order_id, params.amount);
+      const existing = await prisma.paymeTransaction.findUnique({ where: { id: params.id } });
+      if (existing) {
+        if (existing.state !== 1) return fail(PAYME_ERROR.CANNOT_PERFORM);
+        return ok({ create_time: Number(existing.createTime), transaction: existing.id, state: existing.state });
+      }
+      const activeForOrder = await prisma.paymeTransaction.findFirst({
+        where: { orderId: order.id, state: { in: [1, 2] } },
+      });
+      if (activeForOrder) return fail(PAYME_ERROR.ACCOUNT_NOT_FOUND, "order_id");
+
+      const tx = await prisma.paymeTransaction.create({
+        data: { id: params.id, orderId: order.id, amount: params.amount, state: 1, createTime: BigInt(params.time) },
+      });
+      return ok({ create_time: Number(tx.createTime), transaction: tx.id, state: tx.state });
+    }
+
+    if (method === "PerformTransaction") {
+      const tx = await prisma.paymeTransaction.findUnique({ where: { id: params.id } });
+      if (!tx) return fail(PAYME_ERROR.TRANSACTION_NOT_FOUND);
+      if (tx.state === 2) return ok({ perform_time: Number(tx.performTime), transaction: tx.id, state: tx.state });
+      if (tx.state !== 1) return fail(PAYME_ERROR.CANNOT_PERFORM);
+      if (Date.now() - Number(tx.createTime) > PAYME_EXPIRE_MS) {
+        await prisma.paymeTransaction.update({ where: { id: tx.id }, data: { state: -1, cancelTime: BigInt(Date.now()), reason: 4 } });
+        return fail(PAYME_ERROR.CANNOT_PERFORM);
+      }
+      const performTime = Date.now();
+      const updated = await prisma.paymeTransaction.update({ where: { id: tx.id }, data: { state: 2, performTime: BigInt(performTime) } });
+      const order = await prisma.order.update({ where: { id: tx.orderId }, data: { paymentStatus: "paid" }, include: { user: true } });
+      notifyStaffNewOrder(order);
+      return ok({ perform_time: performTime, transaction: updated.id, state: updated.state });
+    }
+
+    if (method === "CancelTransaction") {
+      const tx = await prisma.paymeTransaction.findUnique({ where: { id: params.id } });
+      if (!tx) return fail(PAYME_ERROR.TRANSACTION_NOT_FOUND);
+      if (tx.state === -1 || tx.state === -2) return ok({ cancel_time: Number(tx.cancelTime), transaction: tx.id, state: tx.state });
+      const newState = tx.state === 2 ? -2 : -1;
+      const cancelTime = Date.now();
+      const updated = await prisma.paymeTransaction.update({ where: { id: tx.id }, data: { state: newState, cancelTime: BigInt(cancelTime), reason: params.reason } });
+      if (newState === -2) {
+        await prisma.order.update({ where: { id: tx.orderId }, data: { paymentStatus: "failed" } });
+      }
+      return ok({ cancel_time: cancelTime, transaction: updated.id, state: updated.state });
+    }
+
+    if (method === "CheckTransaction") {
+      const tx = await prisma.paymeTransaction.findUnique({ where: { id: params.id } });
+      if (!tx) return fail(PAYME_ERROR.TRANSACTION_NOT_FOUND);
+      return ok({
+        create_time: Number(tx.createTime), perform_time: Number(tx.performTime), cancel_time: Number(tx.cancelTime),
+        transaction: tx.id, state: tx.state, reason: tx.reason ?? null,
+      });
+    }
+
+    if (method === "GetStatement") {
+      const txs = await prisma.paymeTransaction.findMany({ where: { createTime: { gte: BigInt(params.from), lte: BigInt(params.to) } } });
+      return ok({
+        transactions: txs.map((tx) => ({
+          id: tx.id, create_time: Number(tx.createTime), perform_time: Number(tx.performTime), cancel_time: Number(tx.cancelTime),
+          transaction: tx.id, state: tx.state, reason: tx.reason ?? null, amount: tx.amount, account: { order_id: String(tx.orderId) },
+        })),
+      });
+    }
+
+    return fail(PAYME_ERROR.METHOD_NOT_FOUND);
+  } catch (err) {
+    if (err.code) return fail(err.code, err.data);
+    console.error("Payme webhook xatosi:", err);
+    return fail(-32400);
+  }
+});
+
+module.exports = router;
